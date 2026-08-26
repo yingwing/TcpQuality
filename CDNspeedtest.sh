@@ -6,12 +6,6 @@
 #   1) 单线程测速（TOS 固定 IP，电信/联通/移动 × 北京/上海/广东）
 #   2) ASN / IP 检测（自动探测本机公网 IPv4/IPv6，并解析 ASN）
 #
-# 用法：
-#   bash runTcpQuality-core.sh                                 # 交互式向导
-#   bash runTcpQuality-core.sh --isp 电信,联通 --city 北京,广东  # 指定运营商/城市
-#   bash runTcpQuality-core.sh --city 上海 --ul                 # 仅去程(下载)
-#   bash runTcpQuality-core.sh --isp 移动 --dl                  # 仅回程(上传)
-#
 set -e
 
 # ===================== 颜色 =====================
@@ -28,7 +22,6 @@ IPV4_PUBLIC=""
 IPV6_PUBLIC=""
 
 GET_NODES_URL="${GET_NODES_URL:-https://tcpquality.ibsgss.uk/getNodes}"
-DEBUG_MODE=0
 HAS_CLI_ARGS=0
 UL_FLAG=0
 DL_FLAG=0
@@ -53,17 +46,7 @@ RANK_SESSION_IP4=""
 RESULT_DIR=$(mktemp -d)
 cleanup_result_dir() {
   printf '%b' "${NC:-\033[0m}"
-  if [ "${DEBUG_MODE:-0}" -eq 1 ]; then
-    local archive="${RESULT_DIR}.tar.gz"
-    if [ -d "$RESULT_DIR" ] && tar -C "$(dirname "$RESULT_DIR")" -czf "$archive" "$(basename "$RESULT_DIR")" 2>/dev/null; then
-      rm -rf "$RESULT_DIR"
-      echo -e "${DIM}Debug 压缩包：$archive${NC}"
-    else
-      echo -e "${YELLOW}[!] Debug 打包失败：$RESULT_DIR${NC}"
-    fi
-  else
-    rm -rf "$RESULT_DIR"
-  fi
+  rm -rf "$RESULT_DIR"
 }
 trap cleanup_result_dir EXIT
 
@@ -418,14 +401,8 @@ request_rank_session() {
     -H "X-TcpQuality-Public-IPv4: ${IPV4_PUBLIC:-}" \
     -H "X-TcpQuality-Public-IPv6: ${IPV6_PUBLIC:-}" \
     -o "$response_file" "$RANK_SESSION_API" >/dev/null 2>&1; then
-    if [ "$DEBUG_MODE" -eq 1 ]; then
-      cp "$response_file" "$RESULT_DIR/rank_session_response.json" 2>/dev/null || true
-    fi
     rm -f "$response_file"
     return 1
-  fi
-  if [ "$DEBUG_MODE" -eq 1 ]; then
-    cp "$response_file" "$RESULT_DIR/rank_session_response.json" 2>/dev/null || true
   fi
 
   session_id=$(sed -nE 's/.*"sessionId":"([^"]+)".*/\1/p' "$response_file" | head -1)
@@ -1020,50 +997,6 @@ speedtest_counter_packets() {
     END { if (!found) print "-" }
   '
 }
-
-speedtest_write_probe_meta() {
-  local output_file="$1" probe_type="$2" server_ip="$3" exit_code="$4" result="$5" parsed="$6" connect_ms="$7" tls_ms="$8"
-  local nstat_retrans="${9:--}" tcp_info_available="${10:-0}" tcp_info_retrans="${11:--}"
-  local tcp_info_data_segs_out="${12:--}" tcp_info_segs_out="${13:--}" tcp_info_bytes_retrans="${14:--}"
-  local tcp_info_ratio_denominator="${15:--}" tcp_info_ratio="${16:--}" retrans_source="${17:-nstat}"
-  local trace_available="${18:-0}" trace_unique_retrans="${19:--}" trace_ratio_denominator="${20:--}"
-  local trace_ratio="${21:--}" tcp_info_mode="${22:-none}" trace_key="${23:-skbaddr+skaddr}"
-  local trace_valid="${24:-0}" tcp_info_reason="${25:-unknown}"
-  {
-    printf 'probe_type=%s\n' "$probe_type"
-    printf 'server_ip=%s\n' "$server_ip"
-    printf 'exit_code=%s\n' "$exit_code"
-    printf 'result=%s\n' "$result"
-    printf 'parsed_rate_mbps=%s\n' "$parsed"
-    printf 'connect_ms=%s\n' "$connect_ms"
-    printf 'tls_ms=%s\n' "$tls_ms"
-    printf 'nstat_retrans=%s\n' "$nstat_retrans"
-    printf 'retrans_source=%s\n' "$retrans_source"
-    printf 'tcp_info_available=%s\n' "$tcp_info_available"
-    printf 'tcp_info_retrans=%s\n' "$tcp_info_retrans"
-    printf 'tcp_info_data_segs_out=%s\n' "$tcp_info_data_segs_out"
-    printf 'tcp_info_segs_out=%s\n' "$tcp_info_segs_out"
-    printf 'tcp_info_bytes_retrans=%s\n' "$tcp_info_bytes_retrans"
-    printf 'tcp_info_ratio_denominator=%s\n' "$tcp_info_ratio_denominator"
-    printf 'tcp_info_ratio=%s\n' "$tcp_info_ratio"
-    printf 'tcp_info_mode=%s\n' "$tcp_info_mode"
-    printf 'tcp_info_reason=%s\n' "$tcp_info_reason"
-    printf 'retrans_trace_available=%s\n' "$trace_available"
-    printf 'retrans_trace_valid=%s\n' "$trace_valid"
-    printf 'retrans_trace_unique=%s\n' "$trace_unique_retrans"
-    printf 'retrans_trace_ratio_denominator=%s\n' "$trace_ratio_denominator"
-    printf 'retrans_trace_ratio=%s\n' "$trace_ratio"
-    printf 'retrans_trace_key=%s\n' "$trace_key"
-    printf 'target_host=%s\n' "$(speedtest_tos_bucket_host "$SPEEDTEST_TOS_REGION" 2>/dev/null || true)"
-    printf 'pin_method=curl--resolve\n'
-    printf 'region=%s\n' "$SPEEDTEST_TOS_REGION"
-    printf 'network=%s\n' "$SPEEDTEST_TOS_NETWORK"
-    printf 'object_size=%s\n' "$SPEEDTEST_TOS_SIZE"
-    printf 'timeout=%s\n' "$SPEEDTEST_TOS_TIMEOUT"
-    printf 'recorded_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  } > "${output_file}.meta" 2>/dev/null || true
-}
-
 speedtest_tos_bucket_host() {
   local region="$1" bucket
   case "$region" in
@@ -1152,42 +1085,13 @@ speedtest_tos_delete_object() {
     --resolve "$host:443:$server_ip" -X DELETE \
     "https://$host/$key" >/dev/null 2>&1 || true
 }
-
-speedtest_safe_debug_name() {
-  printf '%s' "$*" | tr -c 'A-Za-z0-9_.-' '_'
-}
-
-speedtest_record_failure_debug() {
-  local group_label="$1" carrier="$2" direction="$3" server_id="$4" city="$5" result_file="$6"
-  local debug_dir name meta_file
-  debug_dir="$RESULT_DIR/speedtest-debug"
-  mkdir -p "$debug_dir" 2>/dev/null || return 0
-  name=$(speedtest_safe_debug_name "${group_label}_${carrier}_${direction}_${server_id:-unknown}")
-  meta_file="$debug_dir/${name}.meta.txt"
-  {
-    printf 'group=%s\n' "$group_label"
-    printf 'carrier=%s\n' "$carrier"
-    printf 'direction=%s\n' "$direction"
-    printf 'server_ip=%s\n' "${server_id:-}"
-    printf 'city=%s\n' "${city:-}"
-    printf 'selected_region=%s\n' "$SPEEDTEST_TOS_REGION"
-    printf 'saved_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-    if [ -f "${result_file}.meta" ]; then
-      printf '\n[probe_meta]\n'
-      cat "${result_file}.meta" 2>/dev/null || true
-    fi
-  } > "$meta_file" 2>/dev/null || true
-  [ -f "$result_file" ] && cp "$result_file" "$debug_dir/${name}.stdout.txt" 2>/dev/null || true
-  [ -f "${result_file}.err" ] && cp "${result_file}.err" "$debug_dir/${name}.stderr.txt" 2>/dev/null || true
-}
-
 speedtest_run_probe() {
   local probe_type="$1" output_file="$2" server_ip="$3"
   local before after nstat_retrans retrans start_bytes end_bytes start_packets end_packets packet_delta delta_bytes counter_enabled
   local host key size timeout meta raw_file exit_code result parsed transfer_bytes partial_timeout probe_pid
   local tcp_info_file tcp_info_available=0 tcp_info_retrans=0
   local tcp_info_data_segs_out=0 tcp_info_segs_out=0 tcp_info_bytes_retrans=0 tcp_info_ratio="-"
-  local tcp_info_ratio_denominator=0 retrans_source="nstat"
+  local tcp_info_ratio_denominator=0
   local tcp_info_mode="none" tcp_info_reason="unknown" trace_unique_retrans=0 trace_ratio="-" trace_available=0 trace_valid=0
   local http_code bytes_download speed_download bytes_upload speed_upload
   local dns_time connect_time appconnect_time pretransfer_time starttransfer_time total_time remote_ip
@@ -1207,7 +1111,6 @@ speedtest_run_probe() {
     printf 'Average %s rate: failed\n\nTime consuming details\n' "$probe_type" > "$output_file"
     printf 'Build connection cost: -1 ms\nTls handshake cost: -1 ms\n' >> "$output_file"
     : > "${output_file}.err"
-    speedtest_write_probe_meta "$output_file" "$probe_type" "$server_ip" 2 failed failed -1 -1
     printf 'failed|0|-1|-1'
     return 0
   fi
@@ -1363,20 +1266,13 @@ speedtest_run_probe() {
   if [ "$tcp_info_available" -eq 1 ]; then
     if [ "$trace_available" -eq 1 ] && [ "$trace_valid" -eq 1 ] && [ "$trace_ratio" != "-" ]; then
       retrans="$trace_ratio"
-      if [ "$SPEEDTEST_RETRANS_TRACE_KEY" = "seq" ]; then
-        retrans_source="ebpf_seq"
-      else
-        retrans_source="ebpf_skb"
-      fi
     else
       retrans="$tcp_info_ratio"
-      retrans_source="tcp_info_${tcp_info_mode}"
     fi
   else
     # nstat is host-global and cannot be attributed to this connection. Never
     # turn it into a percentage when the connection-level sample is missing.
     retrans="-"
-    retrans_source="tcp_info_unavailable"
   fi
 
   meta=$(cat "$raw_file" 2>/dev/null || true)
@@ -1463,14 +1359,8 @@ speedtest_run_probe() {
   if [ "$probe_type" = "upload" ] && [ -n "$key" ]; then
     speedtest_tos_delete_object "$host" "$server_ip" "$key"
   fi
-  speedtest_write_probe_meta "$output_file" "$probe_type" "$server_ip" "$exit_code" "${result:-failed}" "${parsed:-failed}" "$reported_connect_ms" "$reported_tls_ms" \
-    "$nstat_retrans" "$tcp_info_available" "$tcp_info_retrans" "$tcp_info_data_segs_out" \
-    "$tcp_info_segs_out" "$tcp_info_bytes_retrans" "$tcp_info_ratio_denominator" "$tcp_info_ratio" "$retrans_source" \
-    "$trace_available" "$trace_unique_retrans" "$trace_ratio_denominator" "$trace_ratio" "$tcp_info_mode" \
-    "$( [ "$SPEEDTEST_RETRANS_TRACE_KEY" = "seq" ] && printf 'skaddr+seq+end_seq' || printf 'skaddr+skbaddr' )" \
-    "$trace_valid" "$tcp_info_reason"
   rm -f "$raw_file"
-  [ "${DEBUG_MODE:-0}" -eq 1 ] || rm -f "$tcp_info_file" "${tcp_info_file}.tmp" \
+  rm -f "$tcp_info_file" "${tcp_info_file}.tmp" \
     "$SPEEDTEST_RETRANS_TRACE_FILE" "$SPEEDTEST_RETRANS_TRACE_ERR"
   display_connect_ms="$reported_connect_ms"
   display_tls_ms="$reported_tls_ms"
@@ -1809,11 +1699,8 @@ collect_speedtest_results() {
     SPEEDTEST_RANK_ELIGIBLE=0
     SPEEDTEST_RANK_DISABLED_REASON="iptables_unavailable"
   fi
-  if request_rank_session; then
-    [ "$DEBUG_MODE" -eq 1 ] && echo -e "${DIM}[debug] rank session 已获取${NC}" >&2
-  else
+  if ! request_rank_session; then
     [ -n "$SPEEDTEST_RANK_DISABLED_REASON" ] || SPEEDTEST_RANK_DISABLED_REASON="rank_session_request_failed"
-    [ "$DEBUG_MODE" -eq 1 ] && echo -e "${DIM}[debug] rank session 获取失败：$SPEEDTEST_RANK_DISABLED_REASON${NC}" >&2
   fi
   SPEEDTEST_IFACE=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
   [ -n "$SPEEDTEST_IFACE" ] || {
@@ -1850,13 +1737,11 @@ collect_speedtest_results() {
       # 模式：ul=仅去程(下载)  dl=仅回程(上传)  both=下载+上传
       if [ "$SPEEDTEST_DIRECTION" = "ul" ] || [ "$SPEEDTEST_DIRECTION" = "both" ]; then
         IFS='|' read -r download download_retrans download_connect download_tls <<<"$(speedtest_run_probe download "$result_file.download" "$server_id")"
-        [ "$download" = "failed" ] && speedtest_record_failure_debug "$label" "$carrier" "download" "$server_id" "$city" "$result_file.download"
       else
         download="-"; download_retrans="-"; download_connect="-"; download_tls="-"
       fi
       if [ "$SPEEDTEST_DIRECTION" = "dl" ] || [ "$SPEEDTEST_DIRECTION" = "both" ]; then
         IFS='|' read -r upload upload_retrans upload_connect upload_tls <<<"$(speedtest_run_probe upload "$result_file.upload" "$server_id")"
-        [ "$upload" = "failed" ] && speedtest_record_failure_debug "$label" "$carrier" "upload" "$server_id" "$city" "$result_file.upload"
       else
         upload="-"; upload_retrans="-"; upload_connect="-"; upload_tls="-"
       fi
@@ -1866,7 +1751,7 @@ collect_speedtest_results() {
       else
         carrier_values+=("failed|failed|failed|failed|$server_id|$city|$upload_connect|$upload_tls|$download_connect|$download_tls")
       fi
-      [ "${DEBUG_MODE:-0}" -eq 1 ] || rm -rf "$workdir"
+      rm -rf "$workdir"
       done=$((done + 1))
       speedtest_show_progress "$done" "$total"
     done
@@ -1883,10 +1768,6 @@ collect_speedtest_results() {
     RANK_SESSION_STARTED_AT=""
     RANK_SESSION_EXPIRES_AT=""
     RANK_SESSION_IP4=""
-    [ "$DEBUG_MODE" -eq 1 ] && [ -n "$SPEEDTEST_RANK_DISABLED_REASON" ] && \
-      printf '%s\n' "$SPEEDTEST_RANK_DISABLED_REASON" > "$RESULT_DIR/rank_disabled_reason.txt"
-    [ "$DEBUG_MODE" -eq 1 ] && [ -n "$SPEEDTEST_RANK_DISABLED_REASON" ] && \
-      echo -e "${DIM}[debug] 排名凭证已清除：$SPEEDTEST_RANK_DISABLED_REASON${NC}" >&2
   fi
   if [ -n "${SPEEDTEST_STATE_FILE:-}" ]; then
     {
@@ -2011,47 +1892,13 @@ run_speedtest_mode() {
   show_speedtest_results
   echo
 }
-# ===================== 帮助与参数解析 =====================
-show_help() {
-  cat <<EOF
-TcpQuality 单线程测速精简版（speedtest / ASN-IP）
-
-用法:
-  bash runTcpQuality-core.sh [选项]
-
-无参数运行时进入交互式向导：分步选择 测速模式 / 城市 / 运营商。
-
-选项:
-  -h, --help          显示帮助信息并退出
-  --isp LIST          选择运营商，多选用逗号分隔：电信,联通,移动（默认全部）
-  --city LIST         选择测速城市，多选用逗号分隔：北京,上海,广东（默认全部）
-  --ul                仅去程（下载）测速
-  --dl                仅回程（上传）测速
-                        --ul 与 --dl 同时指定或不指定 = 下载+上传
-  --debug             保留临时文件并输出调试信息
-
-示例:
-  bash runTcpQuality-core.sh
-  bash runTcpQuality-core.sh --isp 电信,联通 --city 北京,广东
-  bash runTcpQuality-core.sh --city 上海 --ul
-  bash runTcpQuality-core.sh --isp 移动 --dl
-
-说明:
-  去程 = 下载(download)，回程 = 上传(upload)。
-  单线程测速需要 root 权限（iptables 计数 + 固定目标 IP）。
-EOF
-}
-
+# ===================== 参数解析 =====================
 parse_args() {
   if [ $# -gt 0 ]; then HAS_CLI_ARGS=1; fi
   UL_FLAG=0
   DL_FLAG=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      -h|--help)
-        show_help
-        exit 0
-        ;;
       --isp)
         if [ -z "${2:-}" ] || ! set_selected_isps "$2"; then
           echo -e "${RED}[X] --isp 只支持：电信,联通,移动（可逗号组合或 全部）${NC}" >&2
@@ -2074,13 +1921,8 @@ parse_args() {
         DL_FLAG=1
         shift
         ;;
-      --debug)
-        DEBUG_MODE=1
-        shift
-        ;;
       *)
         echo -e "${RED}[X] 不支持的参数: $1${NC}" >&2
-        echo "使用 -h 或 --help 查看帮助。" >&2
         exit 1
         ;;
     esac
