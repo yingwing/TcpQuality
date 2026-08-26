@@ -1570,10 +1570,10 @@ speedtest_carrier_list() {
 }
 
 set_selected_isps() {
-  local list="$1" item
+  local list="$1" item cn
   list=${list//，/,}
   list=${list// /,}
-  if [ "$list" = "全部" ] || [ "$list" = "all" ]; then
+  if [ "$list" = "all" ]; then
     SELECTED_ISPS=""
     return 0
   fi
@@ -1581,23 +1581,24 @@ set_selected_isps() {
   IFS=',' read -ra items <<< "$list"
   for item in "${items[@]}"; do
     case "$item" in
-      电信|联通|移动)
-        case " $SELECTED_ISPS " in
-          *" $item "*) ;;
-          *) SELECTED_ISPS="$SELECTED_ISPS $item" ;;
-        esac
-        ;;
+      ct) cn="电信" ;;
+      cu) cn="联通" ;;
+      cm) cn="移动" ;;
       *) return 1 ;;
+    esac
+    case " $SELECTED_ISPS " in
+      *" $cn "*) ;;
+      *) SELECTED_ISPS="$SELECTED_ISPS $cn" ;;
     esac
   done
   [ -n "$SELECTED_ISPS" ]
 }
 
 set_selected_cities() {
-  local list="$1" item
+  local list="$1" item cn
   list=${list//，/,}
   list=${list// /,}
-  if [ "$list" = "全部" ] || [ "$list" = "all" ]; then
+  if [ "$list" = "all" ]; then
     SELECTED_CITIES=""
     return 0
   fi
@@ -1605,13 +1606,14 @@ set_selected_cities() {
   IFS=',' read -ra items <<< "$list"
   for item in "${items[@]}"; do
     case "$item" in
-      北京|上海|广东)
-        case " $SELECTED_CITIES " in
-          *" $item "*) ;;
-          *) SELECTED_CITIES="$SELECTED_CITIES $item" ;;
-        esac
-        ;;
+      bj) cn="北京" ;;
+      sh) cn="上海" ;;
+      gd) cn="广东" ;;
       *) return 1 ;;
+    esac
+    case " $SELECTED_CITIES " in
+      *" $cn "*) ;;
+      *) SELECTED_CITIES="$SELECTED_CITIES $cn" ;;
     esac
   done
   [ -n "$SELECTED_CITIES" ]
@@ -1897,18 +1899,19 @@ parse_args() {
   if [ $# -gt 0 ]; then HAS_CLI_ARGS=1; fi
   UL_FLAG=0
   DL_FLAG=0
+  SPEEDTEST_DIRECTION="both"
   while [ $# -gt 0 ]; do
     case "$1" in
       --isp)
         if [ -z "${2:-}" ] || ! set_selected_isps "$2"; then
-          echo -e "${RED}[X] --isp 只支持：电信,联通,移动（可逗号组合或 全部）${NC}" >&2
+          echo -e "${RED}[X] --isp 只支持：ct,cu,cm（可逗号组合或 all）${NC}" >&2
           exit 1
         fi
         shift 2
         ;;
       --city)
         if [ -z "${2:-}" ] || ! set_selected_cities "$2"; then
-          echo -e "${RED}[X] --city 只支持：北京,上海,广东（可逗号组合或 全部）${NC}" >&2
+          echo -e "${RED}[X] --city 只支持：bj,sh,gd（可逗号组合或 all）${NC}" >&2
           exit 1
         fi
         shift 2
@@ -1938,7 +1941,7 @@ parse_args() {
 }
 
 # ===================== 交互式向导 =====================
-# 无参数运行时进入；回车使用默认值（回程+去程 / 全部城市 / 三网）
+# 无参数运行时进入；回车使用默认值（both / all city / all isp）
 run_wizard() {
   local choice city_choice isp_choice c
   local mode_name="下载+上传" city_names="" isp_names=""
