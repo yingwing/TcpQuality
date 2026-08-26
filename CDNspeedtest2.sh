@@ -26,8 +26,6 @@ BG_RED='\033[41m';   BG_GREEN='\033[42m';   BG_YELLOW='\033[43m'
 USE_SUDO=""
 IPV4_PUBLIC=""
 IPV6_PUBLIC=""
-IPV4_WORK=0
-IPV6_WORK=0
 
 GET_NODES_URL="${GET_NODES_URL:-https://tcpquality.ibsgss.uk/getNodes}"
 DEBUG_MODE=0
@@ -167,10 +165,6 @@ bar() {
 }
 
 # ===================== ASN / IP 检测（保留功能） =====================
-ipv6_available() {
-  [ "$IPV6_WORK" -eq 1 ]
-}
-
 is_public_ipv4() {
   local ip="$1"
   awk -F. '
@@ -218,12 +212,10 @@ get_public_ipv4() {
     response=$(curl -fsS4L --max-time 8 "$api" 2>/dev/null | awk 'NR==1 {gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print}')
     if [[ "$response" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && is_public_ipv4 "$response"; then
       IPV4_PUBLIC="$response"
-      IPV4_WORK=1
       return 0
     fi
   done
   IPV4_PUBLIC=""
-  IPV4_WORK=0
   return 1
 }
 
@@ -239,26 +231,16 @@ get_public_ipv6() {
     response=$(curl -6 -fsSL --connect-timeout 5 --max-time 8 "$api" 2>/dev/null | awk 'NR==1 {gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print}')
     if is_valid_ipv6 "$response"; then
       IPV6_PUBLIC="$response"
-      IPV6_WORK=1
       return 0
     fi
   done
   IPV6_PUBLIC=""
-  IPV6_WORK=0
   return 1
 }
 
 detect_ip_stack() {
   get_public_ipv4 || true
   get_public_ipv6 || true
-}
-
-ipv4_available() {
-  [ "$IPV4_WORK" -eq 1 ]
-}
-
-report_api_base() {
-  printf '%s' "${REPORT_API%/generate}"
 }
 
 ensure_public_ips_for_rank() {
@@ -306,28 +288,6 @@ build_asn_map() {
   ' "$cymru_file" > "$map_file"
 }
 
-append_server_asn_meta() {
-  local ip_file="$1" map_file="$2" response_file
-  [ -s "$ip_file" ] || return 0
-  response_file=$(mktemp)
-  if curl -4 -fsSL --connect-timeout 5 --max-time 20 \
-      -X POST -H 'content-type: text/plain; charset=utf-8' \
-      --data-binary "@$ip_file" "$ROUTE_ASN_API" > "$response_file" 2>/dev/null; then
-    awk -F'\t' '
-      NR == 1 { next }
-      {
-        ip = tolower($1)
-        asn = $2
-        owner = $3
-        sub(/^[Aa][Ss]/, "", asn)
-        gsub(/[|\r\n]+/, " ", owner)
-        if (ip ~ /^[0-9A-Fa-f:.]+$/ && asn ~ /^[0-9]+$/) print ip "|" asn "|" owner
-      }
-    ' "$response_file" >> "$map_file"
-  fi
-  rm -f "$response_file"
-}
-
 # 公网 IP 打码：仅作用于展示，ASN 查询与 rank session 仍使用完整 IP。
 # IPv4 保留前两段，后两段打码：59.110.43.16 -> 59.110.*.*
 # IPv6 保留前 3 组，其余打码：2408:4001:abcd:ef01:... -> 2408:4001:abcd:*
@@ -346,13 +306,12 @@ mask_public_ip() {
   fi
 }
 
-# 展示本机公网 IP 及对应 ASN（仅提示，不阻塞主流程）
+# 展示本机公网 IP 及对应 ASN（仅提示，不阻塞主流程）。
+# 每个公网 IP 只输出一行：打码 IP + ASN（如有），避免 IP 重复出现。
 show_ip_asn_info() {
-  local ip_file cymru_file map_file ip asn owner
+  local ip_file cymru_file map_file ip asn owner label
   [ -n "$IPV4_PUBLIC" ] || [ -n "$IPV6_PUBLIC" ] || return 0
   echo -e "${BOLD}${CYAN}本机公网 IP / ASN${NC}"
-  [ -n "$IPV4_PUBLIC" ] && echo -e "  IPv4: ${GREEN}$(mask_public_ipv4 "$IPV4_PUBLIC")${NC}"
-  [ -n "$IPV6_PUBLIC" ] && echo -e "  IPv6: ${GREEN}$(mask_public_ipv6 "$IPV6_PUBLIC")${NC}"
   ip_file=$(mktemp)
   cymru_file=$(mktemp)
   map_file=$(mktemp)
@@ -362,12 +321,24 @@ show_ip_asn_info() {
   if [ -s "$ip_file" ]; then
     query_cymru_asn "$ip_file" "$cymru_file"
     build_asn_map "$cymru_file" "$map_file"
-    while IFS='|' read -r ip asn owner; do
-      [ -n "$ip" ] && [ -n "$asn" ] || continue
-      owner=${owner//|/ }
-      echo -e "  $(mask_public_ip "$ip")  ${DIM}ASN${NC}${asn}  ${owner}"
-    done < "$map_file"
   fi
+  for ip in "$IPV4_PUBLIC" "$IPV6_PUBLIC"; do
+    [ -n "$ip" ] || continue
+    if [[ "$ip" == *:* ]]; then label="IPv6"; else label="IPv4"; fi
+    asn=""; owner=""
+    while IFS='|' read -r aip aasn aowner; do
+      if [ "$aip" = "${ip,,}" ]; then
+        asn="$aasn"
+        owner="${aowner//|/ }"
+        break
+      fi
+    done < "$map_file"
+    if [ -n "$asn" ]; then
+      echo -e "  ${label}: ${GREEN}$(mask_public_ip "$ip")${NC}  ${DIM}ASN${NC}${asn}  ${owner}"
+    else
+      echo -e "  ${label}: ${GREEN}$(mask_public_ip "$ip")${NC}"
+    fi
+  done
   rm -f "$ip_file" "$cymru_file" "$map_file"
 }
 
@@ -380,9 +351,6 @@ SPEEDTEST_TOS_TIMEOUT="${TOS_TIMEOUT:-10}"
 SPEEDTEST_TOS_CT_IP="${TOS_CT_IP:-42.81.80.86}"
 SPEEDTEST_TOS_CU_IP="${TOS_CU_IP:-221.194.175.109}"
 SPEEDTEST_TOS_CM_IP="${TOS_CM_IP:-120.255.0.180}"
-SPEEDTEST_IPV6_PROBE_URL="${SPEEDTEST_IPV6_PROBE_URL:-https://api6.ipify.org}"
-SPEEDTEST_IPV6_CHECKED=0
-SPEEDTEST_IPV6_AVAILABLE=0
 SPEEDTEST_TOS_REMOTE_LOADED=0
 SPEEDTEST_TOS_CT_CITY="北京"
 SPEEDTEST_TOS_CU_CITY="北京"
@@ -555,14 +523,6 @@ load_remote_speedtest_nodes() {
   return 1
 }
 
-speedtest_selected_id() {
-  case "$1" in
-    电信) printf '%s' "$SPEEDTEST_TELECOM_ID" ;;
-    联通) printf '%s' "$SPEEDTEST_UNICOM_ID" ;;
-    移动) printf '%s' "$SPEEDTEST_MOBILE_ID" ;;
-  esac
-}
-
 speedtest_selected_city() {
   case "$1" in
     电信) printf '%s' "$SPEEDTEST_TELECOM_CITY" ;;
@@ -674,15 +634,6 @@ speedtest_curl_partial_timeout_valid() {
       exit 1
     }
     exit !((elapsed + 0) >= (timeout + 0) - 0.1)
-  }'
-}
-
-speedtest_curl_partial_http_valid() {
-  local http_code="$1" elapsed="$2" bytes="$3"
-  [ "$http_code" = "413" ] || return 1
-  [[ "$bytes" =~ ^[0-9]+$ ]] && [ "$bytes" -gt 0 ] || return 1
-  awk -v elapsed="$elapsed" 'BEGIN {
-    if (elapsed !~ /^[0-9]+([.][0-9]+)?$/ || elapsed <= 0) exit 1
   }'
 }
 
@@ -809,30 +760,6 @@ speedtest_tcp_info_ss_snapshot() {
       exit
     }
   '
-}
-
-speedtest_tcp_info_metrics() {
-  local info_file="$1"
-  local tcp_info_retrans tcp_info_data_segs_out tcp_info_segs_out tcp_info_bytes_retrans
-  local denominator ratio
-  [ -s "$info_file" ] || return 1
-  IFS='|' read -r tcp_info_retrans tcp_info_data_segs_out tcp_info_segs_out tcp_info_bytes_retrans < "$info_file" || true
-  if ! [[ "$tcp_info_retrans" =~ ^[0-9]+$ ]] ||
-     ! [[ "$tcp_info_data_segs_out" =~ ^[0-9]+$ ]] ||
-     ! [[ "$tcp_info_segs_out" =~ ^[0-9]+$ ]] ||
-     ! [[ "$tcp_info_bytes_retrans" =~ ^[0-9]+$ ]]; then
-    return 1
-  fi
-  if [ "$tcp_info_data_segs_out" -gt 0 ]; then
-    denominator="$tcp_info_data_segs_out"
-  else
-    denominator="$tcp_info_segs_out"
-  fi
-  [ "$denominator" -gt 0 ] || return 1
-  ratio=$(speedtest_retrans_percent "$tcp_info_retrans" "$denominator")
-  [ "$ratio" != "-" ] || return 1
-  printf '%s|%s|%s|%s|%s' "$ratio" "$tcp_info_retrans" \
-    "$tcp_info_data_segs_out" "$tcp_info_segs_out" "$tcp_info_bytes_retrans"
 }
 
 speedtest_tcp_info_preload_path() {
@@ -1094,31 +1021,6 @@ speedtest_counter_packets() {
   '
 }
 
-speedtest_calc_mbps() {
-  local bytes="$1" seconds="$2"
-  awk -v b="$bytes" -v s="$seconds" 'BEGIN {
-    mbps = b * 8 / s / 1000000;
-    if (s <= 0 || b <= 0 || mbps < 0.05) printf "failed";
-    else printf "%.1f", mbps;
-  }'
-}
-
-speedtest_parse_cost_ms() {
-  local label="$1"
-  awk -v label="$label" '
-    index(tolower($0), tolower(label)) {
-      value = $0
-      sub(/^.*:[[:space:]]*/, "", value)
-      if (match(value, /-?[0-9]+/)) {
-        print substr(value, RSTART, RLENGTH)
-        found = 1
-        exit
-      }
-    }
-    END { if (!found) print "-" }
-  '
-}
-
 speedtest_write_probe_meta() {
   local output_file="$1" probe_type="$2" server_ip="$3" exit_code="$4" result="$5" parsed="$6" connect_ms="$7" tls_ms="$8"
   local nstat_retrans="${9:--}" tcp_info_available="${10:-0}" tcp_info_retrans="${11:--}"
@@ -1251,52 +1153,6 @@ speedtest_tos_delete_object() {
     "https://$host/$key" >/dev/null 2>&1 || true
 }
 
-speedtest_read_sysctl() {
-  local key="$1" path
-  path="/proc/sys/${key//./\/}"
-  if [ -r "$path" ]; then
-    tr '\t' ' ' < "$path" 2>/dev/null | awk '{$1=$1; print}'
-  else
-    sysctl -n "$key" 2>/dev/null | tr '\t' ' ' | awk '{$1=$1; print}'
-  fi
-}
-
-speedtest_qdisc_name() {
-  local iface="${SPEEDTEST_IFACE:-}" root_qdisc default_qdisc
-  if [ -n "$iface" ]; then
-    root_qdisc=$(tc qdisc show dev "$iface" 2>/dev/null | awk '/ root / {print $2; exit}')
-  fi
-  default_qdisc=$(speedtest_read_sysctl net.core.default_qdisc)
-  if [ -n "$default_qdisc" ]; then
-    printf '%s' "$default_qdisc"
-  elif [ -n "$root_qdisc" ] && [ "$root_qdisc" != "noqueue" ]; then
-    printf '%s' "$root_qdisc"
-  elif [ -n "$root_qdisc" ]; then
-    printf '%s' "$root_qdisc"
-  else
-    printf '-'
-  fi
-}
-
-speedtest_tcp_window_bytes() {
-  local values="$1"
-  awk -v values="$values" 'BEGIN {
-    n = split(values, parts, /[[:space:]]+/);
-    if (n >= 3 && parts[3] ~ /^[0-9]+$/) print parts[3];
-    else print "-";
-  }'
-}
-
-speedtest_min_window_bytes() {
-  local tcp_max="$1" endpoint_max="$2"
-  awk -v tcp_max="$tcp_max" -v endpoint_max="$endpoint_max" 'BEGIN {
-    if (tcp_max ~ /^[0-9]+$/ && endpoint_max ~ /^[0-9]+$/) print (tcp_max < endpoint_max ? tcp_max : endpoint_max);
-    else if (tcp_max ~ /^[0-9]+$/) print tcp_max;
-    else if (endpoint_max ~ /^[0-9]+$/) print endpoint_max;
-    else print "-";
-  }'
-}
-
 speedtest_safe_debug_name() {
   printf '%s' "$*" | tr -c 'A-Za-z0-9_.-' '_'
 }
@@ -1323,23 +1179,6 @@ speedtest_record_failure_debug() {
   } > "$meta_file" 2>/dev/null || true
   [ -f "$result_file" ] && cp "$result_file" "$debug_dir/${name}.stdout.txt" 2>/dev/null || true
   [ -f "${result_file}.err" ] && cp "${result_file}.err" "$debug_dir/${name}.stderr.txt" 2>/dev/null || true
-}
-
-speedtest_record_manual_failure_debug() {
-  local group_label="$1" carrier="$2" server_id="$3" city="$4" reason="$5"
-  local debug_dir name
-  debug_dir="$RESULT_DIR/speedtest-debug"
-  mkdir -p "$debug_dir" 2>/dev/null || return 0
-  name=$(speedtest_safe_debug_name "${group_label}_${carrier}_setup_${server_id:-unknown}")
-  {
-    printf 'group=%s\n' "$group_label"
-    printf 'carrier=%s\n' "$carrier"
-    printf 'server_ip=%s\n' "${server_id:-}"
-    printf 'city=%s\n' "${city:-}"
-    printf 'selected_region=%s\n' "$SPEEDTEST_TOS_REGION"
-    printf 'reason=%s\n' "$reason"
-    printf 'saved_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  } > "$debug_dir/${name}.meta.txt" 2>/dev/null || true
 }
 
 speedtest_run_probe() {
@@ -1647,16 +1486,6 @@ speedtest_format_mbps() {
   printf '%s' "$bandwidth"
 }
 
-speedtest_carrier_title() {
-  local carrier="$1" city
-  city=$(speedtest_selected_city "$carrier")
-  if [ -n "$(speedtest_selected_id "$carrier")" ]; then
-    printf '%s%s' "$city" "$carrier"
-  else
-    printf '%s失败' "$carrier"
-  fi
-}
-
 speedtest_display_width() {
   local text="$1" char width=0
   while [ -n "$text" ]; do
@@ -1676,18 +1505,6 @@ speedtest_pad_left() {
   padding=$((width - actual))
   [ "$padding" -gt 0 ] && printf '%*s' "$padding" ''
   printf '%s' "$text"
-}
-
-speedtest_pad_center() {
-  local width="$1" text="$2" actual padding left right
-  actual=$(speedtest_display_width "$text")
-  padding=$((width - actual))
-  [ "$padding" -lt 0 ] && padding=0
-  left=$((padding / 2))
-  right=$((padding - left))
-  [ "$left" -gt 0 ] && printf '%*s' "$left" ''
-  printf '%s' "$text"
-  [ "$right" -gt 0 ] && printf '%*s' "$right" ''
 }
 
 speedtest_print_group_header() {
@@ -2183,15 +2000,13 @@ run_speedtest_mode() {
   local report_time
   check_curl
   detect_ip_stack
-  if ipv6_available; then
-    echo -e "${GREEN}[√] 单线程测速检测到可用 IPv6${NC}"
-  else
-    echo -e "${YELLOW}[!] 单线程测速未检测到可用 IPv6，跳过 IPv6 测速${NC}"
-  fi
   collect_speedtest_results
   report_time=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST（北京时间）')
   clear 2>/dev/null || true
   echo -e "  ${DIM}报告时间：${report_time}${NC}"
+  echo
+  # IP / ASN 显示在结果输出顶部
+  show_ip_asn_info
   echo
   show_speedtest_results
   echo
@@ -2389,12 +2204,6 @@ main() {
   if [ "$HAS_CLI_ARGS" -eq 0 ]; then
     run_wizard
   fi
-
-  # ASN / IP 检测（保留功能）
-  check_curl
-  detect_ip_stack
-  show_ip_asn_info
-  echo
 
   run_speedtest_mode
   exit 0
