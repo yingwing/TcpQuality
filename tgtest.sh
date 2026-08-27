@@ -2164,9 +2164,18 @@ validate_cron_times() {
 }
 
 # 生成 crontab 条目（北京时间 HH:MM，多组用逗号分隔）
+# 获取脚本真实路径；通过管道/远程方式执行（bash <(curl ...) / curl | bash）时无真实文件，返回空
+get_script_path() {
+  local p
+  p="$(readlink -f "$0" 2>/dev/null)"
+  if [ -n "$p" ] && [ -f "$p" ] && [[ "$p" != /dev/fd/* ]] && [[ "$p" != *"pipe:["* ]]; then
+    printf '%s' "$p"
+  fi
+}
+
 cron_schedule_line() {
   local t hour min script_path conf_line log_file
-  script_path="$(readlink -f "$0")"
+  script_path="$(get_script_path)"
   conf_line="CONF_FILE=${CONF_FILE:-$HOME/.tcpquality.conf}"
   log_file="${TCQ_CRON_LOG:-${CONF_FILE:-$HOME/.tcpquality.conf}.cron.log}"
   for t in ${CRON_TIMES//,/ }; do
@@ -2275,7 +2284,16 @@ ensure_cron_service() {
 }
 
 setup_cron() {
-  local existing schedule
+  local existing schedule script_path
+  # 先检测脚本是否有真实文件路径（管道/远程执行时无法定时）
+  script_path="$(get_script_path)"
+  if [ -z "$script_path" ]; then
+    echo -e "${RED}[X] 无法启用定时测速：当前通过管道/远程方式运行（bash <(curl ...)），脚本没有真实文件路径。${NC}"
+    echo -e "  ${YELLOW}定时任务需要脚本落盘后才能被 cron 调用。请先将脚本保存到本地：${NC}"
+    echo "    curl -fsSL <脚本URL> -o /root/tgtest.sh && chmod +x /root/tgtest.sh"
+    echo "    然后重新运行：bash /root/tgtest.sh"
+    return 1
+  fi
   if ! validate_cron_times "$CRON_TIMES"; then
     echo -e "${YELLOW}[!] 测速时间配置无效，已重置为默认 12:00,22:00${NC}"
     CRON_TIMES="12:00,22:00"
@@ -2289,7 +2307,6 @@ setup_cron() {
   # 确保 cron 服务运行
   ensure_cron_service
   # 兜底：给脚本补可执行权限（crontab 用 bash 调用后非必需，但更稳妥）
-  script_path="$(readlink -f "$0")"
   if [ ! -x "$script_path" ]; then
     chmod +x "$script_path" 2>/dev/null || true
   fi
@@ -2302,7 +2319,7 @@ setup_cron() {
     printf '%s\n' "$schedule" | crontab -
   fi
   # 验证写入是否成功
-  if crontab -l 2>/dev/null | grep -qF -- "$(readlink -f "$0") --scheduled"; then
+  if crontab -l 2>/dev/null | grep -qF -- "$script_path --scheduled"; then
     CRON_ENABLED=1
     save_config
     echo -e "${GREEN}[OK] 已启用定时测速：每天 $(echo "$CRON_TIMES" | sed 's/,/ 和 /g')（北京时间）${NC}"
@@ -2317,7 +2334,7 @@ setup_cron() {
 
 disable_cron() {
   local existing
-  existing=$(crontab -l 2>/dev/null | grep -vF -- "$(readlink -f "$0") --scheduled" || true)
+  existing=$(crontab -l 2>/dev/null | grep -vF -- "$(get_script_path) --scheduled" || true)
   if [ -n "$existing" ]; then
     printf '%s\n' "$existing" | crontab -
   else
@@ -2359,7 +2376,11 @@ last_preset_display() {
 # 安装 cdntest 快捷命令
 install_cdntest() {
   local target="/usr/local/bin/cdntest" script_path
-  script_path="$(readlink -f "$0")"
+  script_path="$(get_script_path)"
+  if [ -z "$script_path" ]; then
+    echo -e "${YELLOW}[!] 当前通过管道/远程方式运行，无法安装 cdntest，请先落盘保存脚本${NC}"
+    return 1
+  fi
   if ln -sf "$script_path" "$target" 2>/dev/null; then
     chmod +x "$script_path" 2>/dev/null || true
     echo -e "${GREEN}[OK] 已安装快捷命令 cdntest${NC}"
@@ -2418,7 +2439,7 @@ cron_run_now() {
 # 查看定时任务状态（诊断）
 cron_status() {
   local script_path entries
-  script_path="$(readlink -f "$0")"
+  script_path="$(get_script_path)"
   echo "  --- cron 服务状态 ---"
   if cron_service_running; then
     echo "    [运行中]"
